@@ -1,0 +1,18 @@
+{
+  "targetVoiceChannelId": "",
+  "logChannelId": "",
+  "thresholdLevel": -5,
+  "sustainedMs": 300,
+  "muteDurationMs": 30000,
+  "timeoutAfterViolations": 5,
+  "timeoutDurationMs": 120000,
+  "cooldownMinutes": 60,
+  "bypassRoleIds": [],
+  "enabled": false,
+  "commandPrefix": "!",
+  "timeoutRoomId": "",
+  "sounds": {
+    "mute": null,
+    "timeout": null
+  }
+}
