@@ -300,6 +300,8 @@ async function muteMember(member, level, violationCount, duration) {
 
 	await logAction({ action: 'Muted', member, level, violationCount, durationMs: duration });
 	playSound('mute');
+	const newRecord = recordViolation(member.id, level, 'mute');
+	if (newRecord) announceRecord(member, newRecord);
 }
 
 async function autoUnmute(userId) {
@@ -349,6 +351,8 @@ async function timeoutMember(member, level, violationCount) {
 	await logAction({ action: 'Timed out', member, level, violationCount, durationMs: config.timeoutDurationMs });
 	playSound('timeout');
 	moveToTimeoutRoom(member);
+	const newRecord = recordViolation(member.id, level, 'timeout');
+	if (newRecord) announceRecord(member, newRecord);
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +402,97 @@ function moveToTimeoutRoom(member) {
 }
 
 // ---------------------------------------------------------------------------
+// Stats (stats.json) — purely for fun: per-user violation counts for
+// !leaderboard, and the server's all-time loudest-recorded-violation record.
+// None of this affects enforcement; it's just bragging rights (or shame).
+// ---------------------------------------------------------------------------
+
+const STATS_PATH = path.join(__dirname, 'stats.json');
+
+function loadStats() {
+	try {
+		const raw = fs.readFileSync(STATS_PATH, 'utf8');
+		const saved = JSON.parse(raw);
+		return { users: saved.users || {}, serverRecord: saved.serverRecord || { userId: null, level: null } };
+	} catch {
+		return { users: {}, serverRecord: { userId: null, level: null } };
+	}
+}
+
+function saveStats() {
+	try {
+		fs.writeFileSync(STATS_PATH, JSON.stringify(stats, null, 2));
+	} catch (err) {
+		console.error('Failed to write stats.json:', err);
+	}
+}
+
+let stats = loadStats();
+
+// Records one violation against a user and updates the server-wide record if
+// this violation's level beats it. Returns a record-break summary (for the
+// "new record" announcement) or null if this wasn't a new record.
+function recordViolation(userId, level, kind) {
+	const entry = stats.users[userId] || { mutes: 0, timeouts: 0, peakLufs: null };
+	if (kind === 'timeout') entry.timeouts += 1;
+	else entry.mutes += 1;
+	if (typeof level === 'number' && (entry.peakLufs === null || level > entry.peakLufs)) {
+		entry.peakLufs = level;
+	}
+	stats.users[userId] = entry;
+
+	let brokenRecord = null;
+	if (typeof level === 'number' && (stats.serverRecord.level === null || level > stats.serverRecord.level)) {
+		brokenRecord = { level, previousUserId: stats.serverRecord.userId, previousLevel: stats.serverRecord.level };
+		stats.serverRecord = { userId, level };
+	}
+
+	saveStats();
+	return brokenRecord;
+}
+
+function announceRecord(member, record) {
+	if (!config.logChannelId || !currentGuild) return;
+	currentGuild.channels.fetch(config.logChannelId).then(channel => {
+		if (!channel || !channel.isTextBased()) return;
+		const dethroned = record.previousUserId && record.previousUserId !== member.id
+			? ` — dethroning <@${record.previousUserId}> (previously ${record.previousLevel.toFixed(2)} LUFS)`
+			: '';
+		return channel.send(`🏆 **New scream record!** <@${member.id}> just hit **${record.level.toFixed(2)} LUFS**${dethroned}.`);
+	}).catch(err => console.error('Failed to announce scream record:', err.message));
+}
+
+const MUTE_ROASTS = [
+	'Inside voice, please.',
+	'The mic is not a megaphone.',
+	"Congratulations, you've unlocked silence.",
+	'Someone check on the neighbors.',
+	'That volume was not a suggestion.',
+	'Your vocal cords have been placed on a 30-second cooldown.',
+	'Even the loudness meter flinched.',
+	"New goal: don't be the loudest thing in the call.",
+	'The scream has been noted and rejected.',
+	'Try again, but with your indoor voice.',
+	'This is a Discord call, not a stadium.',
+	'Volume levels: not a personality trait.',
+];
+
+const TIMEOUT_ROASTS = [
+	'Five strikes. The mic has been confiscated.',
+	'You have graduated from "muted" to "banished".',
+	'This is what happens when warnings get ignored.',
+	'Persistence noted. Consequences applied.',
+	'The volume knob has spoken, and it said no.',
+	'Achievement unlocked: full timeout.',
+	'At this point it feels intentional.',
+];
+
+function pickRoast(kind) {
+	const list = kind === 'timeout' ? TIMEOUT_ROASTS : MUTE_ROASTS;
+	return list[Math.floor(Math.random() * list.length)];
+}
+
+// ---------------------------------------------------------------------------
 // Logging — embed to config.logChannelId, falls back to plain text if the
 // channel can't be resolved (or is unset, in which case it's just skipped).
 // ---------------------------------------------------------------------------
@@ -421,6 +516,8 @@ async function logAction({ action, member, level, violationCount, durationMs }) 
 			.setColor(color)
 			.addFields(fields)
 			.setTimestamp();
+		if (action === 'Muted') embed.setDescription(pickRoast('mute'));
+		else if (action === 'Timed out') embed.setDescription(pickRoast('timeout'));
 		await channel.send({ embeds: [embed] });
 	} catch (err) {
 		// Fall back to plain text if embeds can't be sent for some reason.
@@ -834,6 +931,39 @@ async function handleSetSound(message, rawQuery, kind) {
 	message.reply(`"${match.name}" will now play whenever someone is ${kind === 'mute' ? 'muted' : 'timed out'}.`);
 }
 
+async function showLeaderboard(message) {
+	const entries = Object.entries(stats.users)
+		.map(([userId, s]) => ({ userId, total: (s.mutes || 0) + (s.timeouts || 0), mutes: s.mutes || 0, timeouts: s.timeouts || 0 }))
+		.filter(e => e.total > 0)
+		.sort((a, b) => b.total - a.total)
+		.slice(0, 10);
+
+	if (entries.length === 0) {
+		message.channel.send("No violations recorded yet — the Hall of Shame is empty. Someone's gotta be first.");
+		return;
+	}
+
+	const medals = ['🥇', '🥈', '🥉'];
+	const lines = entries.map((e, i) => {
+		const rank = medals[i] || `${i + 1}.`;
+		return `${rank} <@${e.userId}> — **${e.total}** violation${e.total === 1 ? '' : 's'} (${e.mutes} mute${e.mutes === 1 ? '' : 's'}, ${e.timeouts} timeout${e.timeouts === 1 ? '' : 's'})`;
+	});
+
+	const embed = new EmbedBuilder()
+		.setTitle('🏆 Hall of Shame')
+		.setColor(0xED4245)
+		.setDescription(lines.join('\n'));
+
+	if (stats.serverRecord.userId) {
+		embed.addFields({
+			name: 'Server Scream Record',
+			value: `<@${stats.serverRecord.userId}> — ${stats.serverRecord.level.toFixed(2)} LUFS`,
+		});
+	}
+
+	message.channel.send({ embeds: [embed] });
+}
+
 async function showStatus(message) {
 	const mutedList = [...botMutes.entries()].map(([id, r]) => {
 		const remaining = Math.max(0, Math.round((r.mutedAt + r.duration - Date.now()) / 1000));
@@ -946,6 +1076,9 @@ client.on('messageCreate', async (message) => {
 				break;
 			case 'status':
 				await showStatus(message);
+				break;
+			case 'leaderboard':
+				await showLeaderboard(message);
 				break;
 			default:
 				break;

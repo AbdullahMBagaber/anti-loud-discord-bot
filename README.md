@@ -45,6 +45,8 @@ who stay too loud for too long.
 - `!calibrate` — listen for 10s while people talk normally, then report the
   average/peak LUFS measured, so you can pick a sane threshold.
 - `!status` — show current config and anyone currently muted by the bot.
+- `!leaderboard` — Hall of Shame: most-muted/timed-out members, plus the
+  server's all-time loudest-recorded-violation record.
 
 All commands except `!status` require the "Mute Members" permission.
 
@@ -68,7 +70,11 @@ All commands except `!status` require the "Mute Members" permission.
    Discord timeout alone doesn't disconnect someone already in a call.
 7. A soundboard sound plays on mute and/or timeout, if configured with
    `!setmutesound` / `!settimeoutsound`.
-8. Every mute/unmute/timeout is logged as an embed in `logChannelId` (if set).
+8. Every mute/unmute/timeout is logged as an embed in `logChannelId` (if
+   set), with a random roast line and violation stats tracked in
+   `stats.json` (gitignored — it's per-server data, not source). If a
+   violation sets a new server-wide loudness record, the bot announces it
+   in the log channel too.
 
 See `config.example.json` for all tunable values (copy it to `config.json`
 and edit, or use the in-Discord commands above) and `DEPLOY.md` for hosting
