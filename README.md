@@ -1,4 +1,4 @@
-# PhonoGuard - Guard your users' ears from loud audio
+# ANti Loud - Guard your users' ears from loud audio
 
 An auto-mute Discord bot: it listens to a voice channel, measures loudness
 per-user with `ffmpeg`'s `ebur128` (LUFS) filter, and mutes/times out users
